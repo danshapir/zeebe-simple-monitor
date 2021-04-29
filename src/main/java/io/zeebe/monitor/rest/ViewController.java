@@ -11,6 +11,7 @@ import io.zeebe.model.bpmn.instance.TimerEventDefinition;
 import io.zeebe.model.bpmn.instance.zeebe.ZeebeTaskDefinition;
 import io.zeebe.monitor.entity.ElementInstanceEntity;
 import io.zeebe.monitor.entity.ElementInstanceStatistics;
+import io.zeebe.monitor.entity.ErrorEntity;
 import io.zeebe.monitor.entity.IncidentEntity;
 import io.zeebe.monitor.entity.JobEntity;
 import io.zeebe.monitor.entity.MessageEntity;
@@ -20,6 +21,7 @@ import io.zeebe.monitor.entity.VariableEntity;
 import io.zeebe.monitor.entity.WorkflowEntity;
 import io.zeebe.monitor.entity.WorkflowInstanceEntity;
 import io.zeebe.monitor.repository.ElementInstanceRepository;
+import io.zeebe.monitor.repository.ErrorRepository;
 import io.zeebe.monitor.repository.IncidentRepository;
 import io.zeebe.monitor.repository.JobRepository;
 import io.zeebe.monitor.repository.MessageRepository;
@@ -31,6 +33,7 @@ import io.zeebe.monitor.repository.WorkflowRepository;
 import io.zeebe.protocol.record.value.BpmnElementType;
 import org.camunda.bpm.model.xml.instance.ModelElementInstance;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,52 +50,53 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.StreamSupport;
 
 @Controller
 public class ViewController {
 
+  private static final int FIRST_PAGE = 0;
+  private static final int PAGE_RANGE = 2;
+
   private static final List<String> WORKFLOW_INSTANCE_ENTERED_INTENTS =
       Arrays.asList("ELEMENT_ACTIVATED");
-
   private static final List<String> WORKFLOW_INSTANCE_COMPLETED_INTENTS =
       Arrays.asList("ELEMENT_COMPLETED", "ELEMENT_TERMINATED");
-
   private static final List<String> EXCLUDE_ELEMENT_TYPES =
       Arrays.asList(BpmnElementType.MULTI_INSTANCE_BODY.name());
-
   private static final List<String> JOB_COMPLETED_INTENTS = Arrays.asList("completed", "canceled");
 
+  private final String base_path;
+
   @Autowired private WorkflowRepository workflowRepository;
-
   @Autowired private WorkflowInstanceRepository workflowInstanceRepository;
-
   @Autowired private ElementInstanceRepository activityInstanceRepository;
-
   @Autowired private IncidentRepository incidentRepository;
-
   @Autowired private JobRepository jobRepository;
-
   @Autowired private MessageRepository messageRepository;
-
   @Autowired private MessageSubscriptionRepository messageSubscriptionRepository;
-
   @Autowired private TimerRepository timerRepository;
-
   @Autowired private VariableRepository variableRepository;
+  @Autowired private ErrorRepository errorRepository;
+
+  public ViewController(@Value("${server.servlet.context-path}") final String base_path) {
+    this.base_path = base_path.endsWith("/") ? base_path : base_path + "/";
+  }
 
   @GetMapping("/")
-  public String index(Map<String, Object> model, Pageable pageable) {
+  public String index(final Map<String, Object> model, final Pageable pageable) {
+    addContextPathToModel(model);
     return workflowList(model, pageable);
   }
 
   @GetMapping("/views/workflows")
-  public String workflowList(Map<String, Object> model, Pageable pageable) {
+  public String workflowList(final Map<String, Object> model, final Pageable pageable) {
 
     final long count = workflowRepository.count();
 
     final List<WorkflowDto> workflows = new ArrayList<>();
-    for (WorkflowEntity workflowEntity : workflowRepository.findAll(pageable)) {
+    for (final WorkflowEntity workflowEntity : workflowRepository.findAll(pageable)) {
       final WorkflowDto dto = toDto(workflowEntity);
       workflows.add(dto);
     }
@@ -100,12 +104,13 @@ public class ViewController {
     model.put("workflows", workflows);
     model.put("count", count);
 
+    addContextPathToModel(model);
     addPaginationToModel(model, pageable, count);
 
     return "workflow-list-view";
   }
 
-  private WorkflowDto toDto(WorkflowEntity workflowEntity) {
+  private WorkflowDto toDto(final WorkflowEntity workflowEntity) {
     final long workflowKey = workflowEntity.getKey();
 
     final long running = workflowInstanceRepository.countByWorkflowKeyAndEndIsNull(workflowKey);
@@ -118,7 +123,7 @@ public class ViewController {
   @GetMapping("/views/workflows/{key}")
   @Transactional
   public String workflowDetail(
-      @PathVariable long key, Map<String, Object> model, Pageable pageable) {
+      @PathVariable final long key, final Map<String, Object> model, final Pageable pageable) {
 
     final WorkflowEntity workflow =
         workflowRepository
@@ -126,7 +131,7 @@ public class ViewController {
             .orElseThrow(() -> new RuntimeException("No workflow found with key: " + key));
 
     model.put("workflow", toDto(workflow));
-    model.put("resource", workflow.getResource());
+    model.put("resource", getWorkflowResource(workflow));
 
     final List<ElementInstanceState> elementInstanceStates = getElementInstanceStates(key);
     model.put("instance.elementInstances", elementInstanceStates);
@@ -134,7 +139,7 @@ public class ViewController {
     final long count = workflowInstanceRepository.countByWorkflowKey(key);
 
     final List<WorkflowInstanceListDto> instances = new ArrayList<>();
-    for (WorkflowInstanceEntity instanceEntity :
+    for (final WorkflowInstanceEntity instanceEntity :
         workflowInstanceRepository.findByWorkflowKey(key, pageable)) {
       instances.add(toDto(instanceEntity));
     }
@@ -158,12 +163,13 @@ public class ViewController {
     final var bpmn = Bpmn.readModelFromStream(resourceAsStream);
     model.put("instance.bpmnElementInfos", getBpmnElementInfos(bpmn));
 
+    addContextPathToModel(model);
     addPaginationToModel(model, pageable, count);
 
     return "workflow-detail-view";
   }
 
-  private List<ElementInstanceState> getElementInstanceStates(long key) {
+  private List<ElementInstanceState> getElementInstanceStates(final long key) {
 
     final List<ElementInstanceStatistics> elementEnteredStatistics =
         workflowRepository.getElementInstanceStatisticsByKeyAndIntentIn(
@@ -188,7 +194,7 @@ public class ViewController {
                   state.setElementId(elementId);
 
                   final long completedInstances = elementCompletedCount.getOrDefault(elementId, 0L);
-                  long enteredInstances = s.getCount();
+                  final long enteredInstances = s.getCount();
 
                   state.setActiveInstances(enteredInstances - completedInstances);
                   state.setEndedInstances(completedInstances);
@@ -199,7 +205,7 @@ public class ViewController {
     return elementInstanceStates;
   }
 
-  private WorkflowInstanceListDto toDto(WorkflowInstanceEntity instance) {
+  private WorkflowInstanceListDto toDto(final WorkflowInstanceEntity instance) {
 
     final WorkflowInstanceListDto dto = new WorkflowInstanceListDto();
     dto.setWorkflowInstanceKey(instance.getKey());
@@ -220,12 +226,13 @@ public class ViewController {
   }
 
   @GetMapping("/views/instances")
-  public String instanceList(Map<String, Object> model, Pageable pageable) {
+  public String instanceList(final Map<String, Object> model, final Pageable pageable) {
 
     final long count = workflowInstanceRepository.count();
 
     final List<WorkflowInstanceListDto> instances = new ArrayList<>();
-    for (WorkflowInstanceEntity instanceEntity : workflowInstanceRepository.findAll(pageable)) {
+    for (final WorkflowInstanceEntity instanceEntity :
+        workflowInstanceRepository.findAll(pageable)) {
       final WorkflowInstanceListDto dto = toDto(instanceEntity);
       instances.add(dto);
     }
@@ -233,6 +240,7 @@ public class ViewController {
     model.put("instances", instances);
     model.put("count", count);
 
+    addContextPathToModel(model);
     addPaginationToModel(model, pageable, count);
 
     return "instance-list-view";
@@ -241,7 +249,7 @@ public class ViewController {
   @GetMapping("/views/instances/{key}")
   @Transactional
   public String instanceDetail(
-      @PathVariable long key, Map<String, Object> model, Pageable pageable) {
+      @PathVariable final long key, final Map<String, Object> model, final Pageable pageable) {
 
     final WorkflowInstanceEntity instance =
         workflowInstanceRepository
@@ -250,14 +258,16 @@ public class ViewController {
 
     workflowRepository
         .findByKey(instance.getWorkflowKey())
-        .ifPresent(workflow -> model.put("resource", workflow.getResource()));
+        .ifPresent(workflow -> model.put("resource", getWorkflowResource(workflow)));
 
     model.put("instance", toInstanceDto(instance));
+
+    addContextPathToModel(model);
 
     return "instance-detail-view";
   }
 
-  private WorkflowInstanceDto toInstanceDto(WorkflowInstanceEntity instance) {
+  private WorkflowInstanceDto toInstanceDto(final WorkflowInstanceEntity instance) {
     final List<ElementInstanceEntity> events =
         StreamSupport.stream(
                 activityInstanceRepository
@@ -565,10 +575,16 @@ public class ViewController {
             .collect(Collectors.toList());
     dto.setCalledWorkflowInstances(calledWorkflowInstances);
 
+    final var errors =
+        errorRepository.findByWorkflowInstanceKey(instance.getKey()).stream()
+            .map(this::toDto)
+            .collect(Collectors.toList());
+    dto.setErrors(errors);
+
     return dto;
   }
 
-  private List<BpmnElementInfo> getBpmnElementInfos(BpmnModelInstance bpmn) {
+  private List<BpmnElementInfo> getBpmnElementInfos(final BpmnModelInstance bpmn) {
     final List<BpmnElementInfo> infos = new ArrayList<>();
 
     bpmn.getModelElementsByType(ServiceTask.class)
@@ -637,12 +653,13 @@ public class ViewController {
   }
 
   @GetMapping("/views/incidents")
-  public String incidentList(Map<String, Object> model, Pageable pageable) {
+  @Transactional
+  public String incidentList(final Map<String, Object> model, final Pageable pageable) {
 
     final long count = incidentRepository.countByResolvedIsNull();
 
     final List<IncidentListDto> incidents = new ArrayList<>();
-    for (IncidentEntity incidentEntity : incidentRepository.findByResolvedIsNull(pageable)) {
+    for (final IncidentEntity incidentEntity : incidentRepository.findByResolvedIsNull(pageable)) {
       final IncidentListDto dto = toDto(incidentEntity);
       incidents.add(dto);
     }
@@ -650,18 +667,18 @@ public class ViewController {
     model.put("incidents", incidents);
     model.put("count", count);
 
+    addContextPathToModel(model);
     addPaginationToModel(model, pageable, count);
 
     return "incident-list-view";
   }
 
-  private IncidentListDto toDto(IncidentEntity incident) {
+  private IncidentListDto toDto(final IncidentEntity incident) {
     final IncidentListDto dto = new IncidentListDto();
     dto.setKey(incident.getKey());
 
     dto.setBpmnProcessId(incident.getBpmnProcessId());
     dto.setWorkflowKey(incident.getWorkflowKey());
-    ;
     dto.setWorkflowInstanceKey(incident.getWorkflowInstanceKey());
 
     dto.setErrorType(incident.getErrorType());
@@ -683,12 +700,13 @@ public class ViewController {
   }
 
   @GetMapping("/views/jobs")
-  public String jobList(Map<String, Object> model, Pageable pageable) {
+  public String jobList(final Map<String, Object> model, final Pageable pageable) {
 
     final long count = jobRepository.countByStateNotIn(JOB_COMPLETED_INTENTS);
 
     final List<JobDto> dtos = new ArrayList<>();
-    for (JobEntity jobEntity : jobRepository.findByStateNotIn(JOB_COMPLETED_INTENTS, pageable)) {
+    for (final JobEntity jobEntity :
+        jobRepository.findByStateNotIn(JOB_COMPLETED_INTENTS, pageable)) {
       final JobDto dto = toDto(jobEntity);
       dtos.add(dto);
     }
@@ -696,12 +714,13 @@ public class ViewController {
     model.put("jobs", dtos);
     model.put("count", count);
 
+    addContextPathToModel(model);
     addPaginationToModel(model, pageable, count);
 
     return "job-list-view";
   }
 
-  private JobDto toDto(JobEntity job) {
+  private JobDto toDto(final JobEntity job) {
     final JobDto dto = new JobDto();
 
     dto.setKey(job.getKey());
@@ -717,12 +736,12 @@ public class ViewController {
   }
 
   @GetMapping("/views/messages")
-  public String messageList(Map<String, Object> model, Pageable pageable) {
+  public String messageList(final Map<String, Object> model, final Pageable pageable) {
 
     final long count = messageRepository.count();
 
     final List<MessageDto> dtos = new ArrayList<>();
-    for (MessageEntity messageEntity : messageRepository.findAll(pageable)) {
+    for (final MessageEntity messageEntity : messageRepository.findAll(pageable)) {
       final MessageDto dto = toDto(messageEntity);
       dtos.add(dto);
     }
@@ -730,12 +749,33 @@ public class ViewController {
     model.put("messages", dtos);
     model.put("count", count);
 
+    addContextPathToModel(model);
     addPaginationToModel(model, pageable, count);
 
     return "message-list-view";
   }
 
-  private MessageDto toDto(MessageEntity message) {
+  @GetMapping("/views/errors")
+  public String errorList(final Map<String, Object> model, final Pageable pageable) {
+
+    final long count = errorRepository.count();
+
+    final List<ErrorDto> dtos = new ArrayList<>();
+    for (final ErrorEntity entity : errorRepository.findAll(pageable)) {
+      final var dto = toDto(entity);
+      dtos.add(dto);
+    }
+
+    model.put("errors", dtos);
+    model.put("count", count);
+
+    addContextPathToModel(model);
+    addPaginationToModel(model, pageable, count);
+
+    return "error-list-view";
+  }
+
+  private MessageDto toDto(final MessageEntity message) {
     final MessageDto dto = new MessageDto();
 
     dto.setKey(message.getKey());
@@ -749,7 +789,7 @@ public class ViewController {
     return dto;
   }
 
-  private MessageSubscriptionDto toDto(MessageSubscriptionEntity subscription) {
+  private MessageSubscriptionDto toDto(final MessageSubscriptionEntity subscription) {
     final MessageSubscriptionDto dto = new MessageSubscriptionDto();
 
     dto.setKey(subscription.getId());
@@ -769,7 +809,7 @@ public class ViewController {
     return dto;
   }
 
-  private TimerDto toDto(TimerEntity timer) {
+  private TimerDto toDto(final TimerEntity timer) {
     final TimerDto dto = new TimerDto();
 
     dto.setElementId(timer.getTargetFlowNodeId());
@@ -784,16 +824,98 @@ public class ViewController {
     return dto;
   }
 
+  private ErrorDto toDto(final ErrorEntity entity) {
+    final var dto = new ErrorDto();
+    dto.setPosition(entity.getPosition());
+    dto.setErrorEventPosition(entity.getErrorEventPosition());
+    dto.setExceptionMessage(entity.getExceptionMessage());
+    dto.setStacktrace(entity.getStacktrace());
+    dto.setTimestamp(Instant.ofEpochMilli(entity.getTimestamp()).toString());
+
+    if (entity.getWorkflowInstanceKey() > 0) {
+      dto.setWorkflowInstanceKey(entity.getWorkflowInstanceKey());
+    }
+
+    return dto;
+  }
+
+  private String getWorkflowResource(final WorkflowEntity workflow) {
+    final var resource = workflow.getResource();
+    // replace all backticks because they are used to enclose the content of the BPMN in the HTML
+    return resource.replaceAll("`", "\"");
+  }
+
+  private void addContextPathToModel(final Map<String, Object> model) {
+    model.put("context-path", base_path);
+  }
+
   private void addPaginationToModel(
-      Map<String, Object> model, Pageable pageable, final long count) {
+      final Map<String, Object> model, final Pageable pageable, final long count) {
 
     final int currentPage = pageable.getPageNumber();
-    model.put("page", currentPage + 1);
+    final int prevPage = currentPage - 1;
+    final int nextPage = currentPage + 1;
+    final int lastPage = getLastPage(pageable, count);
+
+    final var prevPages =
+        IntStream.range(currentPage - PAGE_RANGE, currentPage)
+            .filter(p -> p > FIRST_PAGE)
+            .boxed()
+            .map(Page::new)
+            .collect(Collectors.toList());
+    final var nextPages =
+        IntStream.rangeClosed(currentPage + 1, currentPage + PAGE_RANGE)
+            .filter(p -> p < lastPage)
+            .boxed()
+            .map(Page::new)
+            .collect(Collectors.toList());
+    final var hasPrevGap =
+        !prevPages.isEmpty() && prevPages.stream().allMatch(p -> p.pageNumber > FIRST_PAGE + 1);
+    final var hasNextGap =
+        !nextPages.isEmpty() && nextPages.stream().allMatch(p -> p.pageNumber < lastPage - 1);
+
+    model.put("page", new Page(currentPage));
+    model.put("prevPages", prevPages);
+    model.put("nextPages", nextPages);
+    model.put("hasPrevPagesGap", hasPrevGap);
+    model.put("hasNextPagesGap", hasNextGap);
+
     if (currentPage > 0) {
-      model.put("prevPage", currentPage - 1);
+      model.put("prevPage", new Page(prevPage));
+      model.put("firstPage", new Page(FIRST_PAGE));
     }
-    if (count > (1 + currentPage) * pageable.getPageSize()) {
-      model.put("nextPage", currentPage + 1);
+    if (lastPage > currentPage) {
+      model.put("nextPage", new Page(nextPage));
+      model.put("lastPage", new Page(lastPage));
+    }
+  }
+
+  private int getLastPage(final Pageable pageable, final long count) {
+    int lastPage = 0;
+    if (pageable.getPageSize() > 0) {
+      lastPage = (int) count / pageable.getPageSize();
+      if (count % pageable.getPageSize() == 0) {
+        lastPage--;
+      }
+    }
+    return lastPage;
+  }
+
+  private static class Page {
+    private final int pageNumber;
+    private final int displayNumber;
+
+    private Page(final int pageNumber) {
+      this.pageNumber = pageNumber;
+      this.displayNumber = pageNumber + 1;
+    }
+
+    public int getPageNumber() {
+      return pageNumber;
+    }
+
+    public int getDisplayNumber() {
+      return displayNumber;
     }
   }
 
@@ -801,16 +923,20 @@ public class ViewController {
     private final long scopeKey;
     private final String name;
 
-    VariableTuple(long scopeKey, String name) {
+    VariableTuple(final long scopeKey, final String name) {
       this.scopeKey = scopeKey;
       this.name = name;
     }
 
     @Override
-    public boolean equals(Object o) {
-      if (this == o) return true;
-      if (o == null || getClass() != o.getClass()) return false;
-      VariableTuple that = (VariableTuple) o;
+    public boolean equals(final Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+      final VariableTuple that = (VariableTuple) o;
       return scopeKey == that.scopeKey && Objects.equals(name, that.name);
     }
 

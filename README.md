@@ -1,13 +1,18 @@
 Zeebe Simple Monitor
 =========================
 
+[![](https://img.shields.io/badge/Community%20Extension-An%20open%20source%20community%20maintained%20project-FF4700)](https://github.com/camunda-community-hub/community)
+
+[![](https://img.shields.io/badge/Lifecycle-Stable-brightgreen)](https://github.com/Camunda-Community-Hub/community/blob/main/extension-lifecycle.md#stable-)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 A monitoring application for [Zeebe](https://zeebe.io). It is designed for developers to
 
 * get in touch with Zeebe and workflow execution (BPMN)
 * test workflows manually
-* provide insides how workflows are executed 
+* provide insides on how workflows are executed 
 
-The application imports the data from Zeebe using the [Hazelcast exporter](https://github.com/zeebe-io/zeebe-hazelcast-exporter). It aggregates the data and store it into a (in-memory) database. The data is display on server-side rendered HTML pages.
+The application imports the data from Zeebe using the [Hazelcast exporter](https://github.com/zeebe-io/zeebe-hazelcast-exporter). It aggregates the data and stores it into a (in-memory) database. The data is displayed on server-side rendered HTML pages.
 
 ![how-it-works](docs/how-it-works.png)
 
@@ -81,9 +86,25 @@ spring:
 
 server:
   port: 8082
+  servlet:
+    context-path: /
 ```
 
-Using a different database, for example, PostgreSQL:
+#### Change the Context-Path
+
+The context-path or base-path of the application can be changed using the following property:
+
+``` 
+server:
+  servlet:
+    context-path: /monitor/
+```
+
+It is then available under http://localhost:8082/monitor.
+
+#### Change the Database
+
+For example, using PostgreSQL:
 
 * change the following database configuration settings
 

@@ -5,6 +5,7 @@ import io.zeebe.monitor.rest.WorkflowInstanceNotification.Type;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 
@@ -12,6 +13,12 @@ import org.springframework.stereotype.Controller;
 public class ZeebeNotificationService {
 
   private static final Logger LOG = LoggerFactory.getLogger(ZeebeNotificationService.class);
+
+  private final String base_path;
+
+  public ZeebeNotificationService(@Value("${server.servlet.context-path}") final String base_path) {
+    this.base_path = base_path.endsWith("/") ? base_path : base_path + "/";
+  }
 
   @Autowired private SimpMessagingTemplate webSocket;
 
@@ -43,6 +50,8 @@ public class ZeebeNotificationService {
   }
 
   private void sendNotification(final WorkflowInstanceNotification notification) {
-    webSocket.convertAndSend("/notifications/workflow-instance", notification);
+    final var destination = base_path +
+            "notifications/workflow-instance";
+    webSocket.convertAndSend(destination, notification);
   }
 }
